@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BioTreat 生产计划</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body>
+<header><div class="brand">BioTreat 工艺联控</div><nav><a href="/process">工艺总控</a><a href="/aeration">曝气调节</a><a href="/sludge">污泥回流</a><a href="/alarms">异常处置</a><a aria-current="page" href="/planning">生产计划</a></nav></header>
+<main>
+  <div class="page-head"><div><h1>跨处理线生产计划</h1><div class="muted">按来水来源、预期流量和目标启动时间排定待启动批次，结合均衡池容量与活跃批次给出执行顺序</div></div><div class="status"><span class="dot"></span><span id="health">checking</span></div></div>
+  <div class="grid">
+    <section class="panel"><h2>登记待启动批次</h2><form id="create">
+      <label>来水来源<input name="source" value="north-intake" required></label>
+      <label>预期流量 m³/h<input name="flow" type="number" value="760" min="1" step="1" required></label>
+      <label>目标启动时间（本地时间）<input name="target" type="datetime-local" step="60" required></label>
+      <label>偏好处理线（可选）<select name="prefer" id="preferCreate"><option value="">自动选择</option></select></label>
+      <button>加入生产计划</button>
+    </form></section>
+    <section class="panel wide"><h2 style="display:flex;justify-content:space-between;align-items:center;">可执行顺序 <button class="mini" id="runNext" type="button">执行下一条可启动计划</button></h2><div id="order"><div class="muted">暂无到点计划</div></div></section>
+    <section class="panel hidden" id="editPanel"><h2>调整待启动计划</h2><form id="edit">
+      <input type="hidden" name="id">
+      <label>计划编号<div class="muted" id="editId"></div></label>
+      <label>来水来源<input name="source" required></label>
+      <label>预期流量 m³/h<input name="flow" type="number" min="1" step="1" required></label>
+      <label>目标启动时间（本地时间）<input name="target" type="datetime-local" step="60" required></label>
+      <label>偏好处理线（可选）<select name="prefer" id="preferEdit"><option value="">自动选择</option></select></label>
+      <div class="row-actions"><button class="mini">保存调整</button><button class="mini ghost" type="button" id="editCancel">放弃</button></div>
+    </form></section>
+    <section class="panel wide"><h2>生产计划明细</h2><table><thead><tr><th>#</th><th>来源</th><th>流量 m³/h</th><th>目标启动时间</th><th>状态</th><th>原因 / 候选</th><th>目标线·均衡池</th><th>操作</th></tr></thead><tbody id="plans"></tbody></table></section>
+    <section class="panel"><h2>现场占用</h2><table><thead><tr><th>处理线</th><th>阶段</th><th>状态</th></tr></thead><tbody id="lines"></tbody></table><h2 style="margin-top:14px;">均衡池</h2><table><thead><tr><th>均衡池</th><th>容量</th><th>占用线</th></tr></thead><tbody id="equalizers"></tbody></table></section>
+    <section class="panel wide"><h2>最近操作</h2><pre id="output">等待操作</pre></section>
+  </div>
+</main>
+<script src="/assets/common.js"></script><script>
+const REASON_TEXT = {
+  before_target_time: "未到目标启动时间",
+  line_active_batch: "处理线存在活跃批次",
+  line_emergency: "处理线已急停隔离",
+  line_reserved_by_plan: "处理线已被前序计划预占",
+  intake_capacity: "流量超过处理线进水上限",
+  equalizer_capacity: "没有容量足够的空闲均衡池",
+  equalizer_reserved_by_plan: "大容量均衡池已被前序计划预占",
+  field_state_changed: "执行时现场状态已变化，请刷新后重试"
+};
+const STATUS_TEXT = { waiting: "等待", running: "运行中", completed: "已完成", canceled: "已取消" };
+function esc(v){return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function fmtTime(t){return t ? new Date(t).toLocaleString() : "-";}
+function reasonText(rs){return (rs||[]).map(r => REASON_TEXT[r] || r).join("；") || "—";}
+function toLocalInput(iso){const d=new Date(iso);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
+function nowLocalInput(){return toLocalInput(new Date().toISOString());}
+async function api(path, options={}){
+  const res = await fetch(path, {headers:{"Content-Type":"application/json",...(options.headers||{})}, ...options});
+  const data = await res.json().catch(()=>({error:res.statusText}));
+  if(!res.ok) throw Object.assign(new Error(data.error || res.statusText), {data, status:res.status});
+  return data;
+}
+function lineOptions(sel){const sels=document.querySelectorAll("#preferCreate,#preferEdit");sels.forEach(s=>{const cur=s.id==="preferEdit"?sel:"";s.innerHTML='<option value="">自动选择</option>'+(window.__lines||[]).map(l=>`<option value="${esc(l.id)}" ${l.id===cur?"selected":""}>${esc(l.id)}</option>`).join("");});}
+function render(b){
+  window.__lines = b.lines; lineOptions(document.querySelector("#preferEdit").value);
+  document.querySelector("#order").innerHTML = b.executable_order.length ? b.executable_order.map(o=>{
+    const tag = o.executable
+      ? `<span class="ok-text">可启动 → ${esc(o.candidate_line)} / ${esc(o.candidate_equalizer)}</span>`
+      : `<span class="bad-text">无法启动：${esc(reasonText(o.reasons))}</span>`;
+    return `<div class="order-item"><span><strong>#${o.position}</strong> ${esc(o.source)} · ${o.flow_m3_hour} m³/h · ${esc(fmtTime(o.target_at))}</span>${tag}</div>`;
+  }).join("") : '<div class="muted">暂无到点计划</div>';
+  document.querySelector("#runNext").disabled = !b.executable_order.some(o=>o.executable);
+  document.querySelector("#plans").innerHTML = b.entries.map((e,i)=>{
+    let badge;
+    if(e.status==="waiting" && e.due && !e.executable) badge='<span class="badge blocked">无法启动</span>';
+    else if(e.status==="waiting" && e.executable) badge='<span class="badge waiting">等待·可启动</span>';
+    else badge=`<span class="badge ${e.status}">${STATUS_TEXT[e.status]||e.status}</span>`;
+    const detail = e.status==="waiting"
+      ? (e.executable ? "现场校验通过，可执行" : esc(reasonText(e.reasons)) + (e.last_reject ? `<div class="muted">最近拒绝 ${esc(fmtTime(e.last_reject.at))}：${esc(reasonText(e.last_reject.reasons))}</div>` : ""))
+      : (e.last_reject ? `<div class="muted">启动前曾拒绝：${esc(reasonText(e.last_reject.reasons))}</div>` : "—");
+    const target = e.status==="running" ? `${esc(e.line_id)} / ${esc(b.equalizers.find(q=>q.line_id===e.line_id)?.id || "-")}`
+      : e.status==="completed" ? `${esc(e.line_id)}（批次已结束）`
+      : e.executable ? `${esc(e.candidate_line)} / ${esc(e.candidate_equalizer)}` : "—";
+    const actions = e.status==="waiting"
+      ? `<span class="row-actions">${e.executable?`<button class="mini" data-act="run" data-id="${e.id}">执行</button>`:""}<button class="mini ghost" data-act="edit" data-id="${e.id}">调整</button><button class="mini danger" data-act="cancel" data-id="${e.id}">取消</button></span>`
+      : "—";
+    return `<tr><td>${i+1}</td><td>${esc(e.source)}</td><td>${e.flow_m3_hour}</td><td>${esc(fmtTime(e.target_at))}</td><td>${badge}</td><td>${detail}</td><td>${target}</td><td>${actions}</td></tr>`;
+  }).join("");
+  document.querySelector("#lines").innerHTML = b.lines.map(l=>`<tr><td>${esc(l.id)}</td><td>${esc(l.stage)}</td><td>${l.emergency?'<span class="bad-text">急停</span>':(l.active_batch_id?'<span class="ok-text">运行中</span>':'空闲')}</td></tr>`).join("");
+  document.querySelector("#equalizers").innerHTML = b.equalizers.map(q=>`<tr><td>${esc(q.id)}</td><td>${q.capacity}</td><td>${q.line_id?esc(q.line_id):'<span class="muted">空闲</span>'}</td></tr>`).join("");
+}
+async function loadBoard(){
+  try { const b = await request("/api/production-plans"); window.__board = b; render(b); }
+  catch(err){ showError(err); }
+}
+document.querySelector("#create").addEventListener("submit", async e=>{
+  e.preventDefault(); const f = new FormData(e.target);
+  const payload = {source:f.get("source"), flow_m3_hour:Number(f.get("flow")),
+    target_at:new Date(f.get("target")).toISOString(), prefer_line:f.get("prefer")||""};
+  try { const b = await api("/api/production-plans",{method:"POST",body:JSON.stringify(payload)}); render(b); show({created:true}); e.target.reset(); e.target.elements.target.value=nowLocalInput(); }
+  catch(err){ showError(err); }
+});
+document.querySelector("#runNext").addEventListener("click", async ()=>{
+  try { const r = await api("/api/production-plans/execute-next",{method:"POST"}); render(r.board); show(r.batch); }
+  catch(err){ if(err.data?.board) render(err.data.board); showError(err); }
+});
+document.querySelector("#plans").addEventListener("click", async ev=>{
+  const btn = ev.target.closest("button[data-act]"); if(!btn) return;
+  const id = btn.dataset.id, act = btn.dataset.act;
+  if(act==="run"){
+    try { const r = await api(`/api/production-plans/${id}/execute`,{method:"POST"}); render(r.board); show(r.batch); }
+    catch(err){ if(err.data?.board) render(err.data.board); showError(err); }
+  } else if(act==="cancel"){
+    if(!confirm("确认取消该待启动计划？已启动批次不受影响。")) return;
+    try { const b = await api(`/api/production-plans/${id}`,{method:"DELETE"}); render(b); show({canceled:id}); }
+    catch(err){ showError(err); }
+  } else if(act==="edit"){
+    const e = window.__board.entries.find(x=>x.id===id); if(!e) return;
+    const f = document.querySelector("#edit");
+    f.elements.id.value=e.id; f.elements.source.value=e.source; f.elements.flow.value=e.flow_m3_hour; f.elements.target.value=toLocalInput(e.target_at); f.elements.prefer.value=e.prefer_line||"";
+    lineOptions(e.prefer_line||"");
+    document.querySelector("#editId").textContent=id; document.querySelector("#editPanel").classList.remove("hidden");
+    f.scrollIntoView({behavior:"smooth", block:"nearest"});
+  }
+});
+document.querySelector("#edit").addEventListener("submit", async e=>{
+  e.preventDefault(); const f = new FormData(e.target), id = f.get("id");
+  const payload = {source:f.get("source"), flow_m3_hour:Number(f.get("flow")),
+    target_at:new Date(f.get("target")).toISOString(), prefer_line:f.get("prefer")||""};
+  try { const b = await api(`/api/production-plans/${id}`,{method:"PATCH",body:JSON.stringify(payload)});
+    render(b); document.querySelector("#editPanel").classList.add("hidden"); show({adjusted:id}); }
+  catch(err){ showError(err); }
+});
+document.querySelector("#editCancel").addEventListener("click", ()=>document.querySelector("#editPanel").classList.add("hidden"));
+document.querySelector("#create").elements.target.value = nowLocalInput();
+loadBoard().catch(showError);
+setInterval(loadBoard, 5000);
+</script></body></html>

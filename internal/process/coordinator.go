@@ -18,6 +18,7 @@ import (
 	"github.com/wyw14/cry-97/internal/journal"
 	"github.com/wyw14/cry-97/internal/lab"
 	"github.com/wyw14/cry-97/internal/model"
+	"github.com/wyw14/cry-97/internal/planning"
 	"github.com/wyw14/cry-97/internal/sensor"
 	"github.com/wyw14/cry-97/internal/settling"
 	"github.com/wyw14/cry-97/internal/sludge"
@@ -50,6 +51,8 @@ type Plant struct {
 	devices       *DeviceBus
 	sampler       *sensor.Sampler
 	receiver      *sensor.Receiver
+	plans         *planning.Book
+	planStore     *planning.Store
 }
 
 func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plant, error) {
@@ -140,6 +143,18 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		return nil, err
 	}
 	sampler := sensor.NewSampler()
+	planStore, err := planning.NewStore(filepath.Join(dataDir, "planning.json"))
+	if err != nil {
+		return nil, err
+	}
+	persistedPlans, err := planStore.Load()
+	if err != nil {
+		return nil, err
+	}
+	planBook, err := planning.LoadBook(persistedPlans)
+	if err != nil {
+		return nil, err
+	}
 	plant := &Plant{
 		now: now, lines: make(map[model.LineID]model.LineState), batches: make(map[uuid.UUID]model.Batch),
 		lineBatches: make(map[model.LineID]uuid.UUID), store: store, snapshots: snapshots,
@@ -148,6 +163,7 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		settling: make(map[model.LineID]*settling.State), cycles: settling.NewCycleBook(),
 		interlocks: arbiter, drains: drains, pumps: pumps, handovers: sludge.NewHandoverBook(),
 		sequences: sequences, compensations: queue, devices: devices, sampler: sampler, receiver: receiver,
+		plans: planBook, planStore: planStore,
 	}
 	for _, lineID := range lines {
 		plant.lines[lineID] = model.NewLineState(lineID, now())

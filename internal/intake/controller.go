@@ -74,3 +74,11 @@ func (c *Controller) Current(lineID model.LineID) (Admission, bool) {
 	value, ok := c.admissions[lineID]
 	return value, ok
 }
+
+// Capacity reports the configured intake limit for a line.
+func (c *Controller) Capacity(lineID model.LineID) (float64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	value, ok := c.capacity[lineID]
+	return value, ok
+}

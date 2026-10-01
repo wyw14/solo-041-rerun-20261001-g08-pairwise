@@ -54,6 +54,19 @@ func (p *Plant) ApplyRecovered(ctx context.Context, event model.Event) error {
 		p.devices.StopLine(event.LineID, state.Generation)
 		return nil
 	}
+	if event.Kind == model.EventBatchCreated || event.Kind == model.EventStageChanged {
+		var batch model.Batch
+		if err := event.Decode(&batch); err != nil {
+			return err
+		}
+		if batch.LineID != event.LineID {
+			return errors.New("batch recovery payload does not match event line")
+		}
+		p.batches[batch.ID] = batch
+		p.lineBatches[event.LineID] = batch.ID
+		state.BatchID = batch.ID.String()
+		state.Stage = batch.Stage
+	}
 	if event.Kind == model.EventDeviceCommanded {
 		var command model.DeviceCommand
 		if err := event.Decode(&command); err != nil {
