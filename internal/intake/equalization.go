@@ -39,19 +39,20 @@ func NewEqualizationPool(basins []Equalizer) (*EqualizationPool, error) {
 func (p *EqualizationPool) Assign(lineID model.LineID, flow float64, now time.Time) (Equalizer, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for id, basin := range p.basins {
-		if basin.LineID == lineID {
+	ids := make([]string, 0, len(p.basins))
+	for id := range p.basins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		basin := p.basins[id]
+		if basin.LineID == lineID && flow <= basin.Capacity {
 			basin.AssignedFlow = flow
 			basin.AssignedAt = now.UTC()
 			p.basins[id] = basin
 			return basin, nil
 		}
 	}
-	ids := make([]string, 0, len(p.basins))
-	for id := range p.basins {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
 	for _, id := range ids {
 		basin := p.basins[id]
 		if basin.LineID == "" && flow <= basin.Capacity {

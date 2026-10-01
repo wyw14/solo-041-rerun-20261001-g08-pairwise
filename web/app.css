@@ -35,6 +35,16 @@ input, select { width: 100%; border: 1px solid #b9c7cc; border-radius: 4px; padd
 button { border: 0; border-radius: 4px; padding: 10px 13px; background: #206c63; color: #fff; font-weight: 650; cursor: pointer; }
 button:hover { background: #185951; }
 button.danger { background: #a63e37; }
+button.ghost { background: #e7edee; color: #2c3e45; }
+button.ghost:hover { background: #d8e1e3; }
+.chip { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.chip.waiting { background: #e3edf5; color: #2c5f8a; }
+.chip.running { background: #dcf2e6; color: #1d7a4c; }
+.chip.blocked { background: #fae3e1; color: #a63e37; }
+.chip.done { background: #e8eaec; color: #53636b; }
+.chip.cancelled { background: #efe9e4; color: #8a6d3b; }
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.row-actions button { padding: 5px 9px; font-size: 12px; }
 pre { margin: 0; min-height: 78px; padding: 12px; overflow: auto; border-radius: 4px; color: #dbe9e7; background: #15282b; font-size: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 9px 8px; border-bottom: 1px solid #e5eaec; text-align: left; }

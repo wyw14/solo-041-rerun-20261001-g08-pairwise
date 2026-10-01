@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BioTreat 生产计划</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body>
+<header><div class="brand">BioTreat 工艺联控</div><nav><a href="/process">工艺总控</a><a aria-current="page" href="/plan">生产计划</a><a href="/aeration">曝气调节</a><a href="/sludge">污泥回流</a><a href="/alarms">异常处置</a></nav></header>
+<main>
+  <div class="page-head"><div><h1>跨线生产计划</h1><div class="muted">按来水来源、预期流量与目标处理时间安排待启动批次</div></div><div class="status"><span class="dot"></span><span id="health">checking</span></div></div>
+  <div class="grid">
+    <section class="panel wide"><h2>可执行顺序</h2><table><thead><tr><th>顺序</th><th>处理线</th><th>来源</th><th>流量 m³/h</th><th>目标处理时间</th><th>评估</th></tr></thead><tbody id="sequence"></tbody></table></section>
+    <section class="panel"><h2 id="form-title">计划新批次</h2><form id="schedule"><label>处理线<select name="line"><option>line-1</option><option>line-2</option><option>line-3</option></select></label><label>来水来源<input name="source" value="north-intake"></label><label>预期流量 m³/h<input name="flow" type="number" value="760" min="1"></label><label>目标处理时间<input name="target_start" type="datetime-local" required></label><button id="form-submit" type="submit">加入计划</button><button id="form-cancel" type="button" class="ghost" hidden>取消调整</button></form></section>
+    <section class="panel wide"><h2>计划看板</h2><table><thead><tr><th>处理线</th><th>来源</th><th>流量 m³/h</th><th>目标处理时间</th><th>状态</th><th>说明</th><th>操作</th></tr></thead><tbody id="board"></tbody></table></section>
+    <section class="panel"><h2>均衡池占用</h2><div class="rows" id="equalizers"></div></section>
+    <section class="panel wide"><h2>最近操作</h2><pre id="output">等待操作</pre></section>
+    <section class="panel"><h2>已完成 / 已取消</h2><div class="rows" id="history"></div></section>
+  </div>
+</main>
+<script src="/assets/common.js"></script>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = t => t ? new Date(t).toLocaleString() : '-';
+const LOCAL = t => { const d = new Date(t); return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
+const STATUS = { waiting: ['等待', 'waiting'], running: ['运行', 'running'], blocked: ['无法启动', 'blocked'], completed: ['完成', 'done'], cancelled: ['已取消', 'cancelled'] };
+const chip = st => { const [label, cls] = STATUS[st] || [st, '']; return `<span class="chip ${cls}">${label}</span>`; };
+const form = document.querySelector('#schedule');
+let editing = null, lastData = null;
+
+async function loadPlan() {
+  const data = await request('/api/plan');
+  lastData = data;
+  document.querySelector('#sequence').innerHTML = data.sequence.length
+    ? data.sequence.map(x => `<tr><td>${x.order}</td><td>${esc(x.line_id)}</td><td>${esc(x.source)}</td><td>${x.flow_m3_hour}</td><td>${fmt(x.target_start)}</td><td>${x.ready ? '<span class="chip running">可启动</span>' : esc(x.detail)}</td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted">暂无等待中的计划</td></tr>';
+  const rows = [...data.waiting, ...data.blocked, ...data.running];
+  document.querySelector('#board').innerHTML = rows.length
+    ? rows.map(p => {
+        const note = p.reason || (p.status === 'running' ? `批次 ${p.batch_id.slice(0, 8)}… 运行中` : '待启动');
+        const actions = p.status === 'running' ? '<span class="muted">已启动，不可调整</span>'
+          : `<div class="row-actions"><button data-act="execute" data-id="${p.id}">${p.status === 'blocked' ? '重试执行' : '执行'}</button><button class="ghost" data-act="edit" data-id="${p.id}">调整</button><button class="danger" data-act="cancel" data-id="${p.id}">取消</button></div>`;
+        return `<tr><td>${esc(p.line_id)}</td><td>${esc(p.source)}</td><td>${p.flow_m3_hour}</td><td>${fmt(p.target_start)}</td><td>${chip(p.status)}</td><td>${esc(note)}</td><td>${actions}</td></tr>`;
+      }).join('')
+    : '<tr><td colspan="7" class="muted">暂无计划批次</td></tr>';
+  document.querySelector('#equalizers').innerHTML = data.equalizers.map(e =>
+    `<div class="row"><span>${esc(e.id)}</span><span>${e.line_id ? `分配给 ${esc(e.line_id)} · ${e.assigned_flow} m³/h` : `空闲 · 容量 ${e.capacity} m³/h`}</span></div>`).join('');
+  const history = [...data.completed, ...data.cancelled].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+  document.querySelector('#history').innerHTML = history.length
+    ? history.map(p => `<div class="row"><span>${chip(p.status)} ${esc(p.line_id)}</span><span>${esc(p.source)} · ${p.flow_m3_hour} m³/h</span></div>`).join('')
+    : '<div class="muted">暂无历史记录</div>';
+}
+
+function resetForm() {
+  editing = null;
+  form.reset();
+  form.elements.target_start.value = LOCAL(Date.now() + 3600e3);
+  document.querySelector('#form-title').textContent = '计划新批次';
+  document.querySelector('#form-submit').textContent = '加入计划';
+  document.querySelector('#form-cancel').hidden = true;
+}
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = new FormData(form);
+  if (!f.get('target_start')) { showError(new Error('请选择目标处理时间')); return; }
+  const body = { source: f.get('source'), flow_m3_hour: Number(f.get('flow')), target_start: new Date(f.get('target_start')).toISOString() };
+  try {
+    show(await request(editing ? `/api/plan/${editing}/revise` : '/api/plan', { method: 'POST', body: JSON.stringify(editing ? body : { ...body, line_id: f.get('line') }) }));
+    resetForm();
+    loadPlan();
+  } catch (err) { showError(err); }
+});
+
+document.querySelector('#form-cancel').addEventListener('click', resetForm);
+
+document.querySelector('#board').addEventListener('click', async e => {
+  const button = e.target.closest('button');
+  if (!button) return;
+  const { act, id } = button.dataset;
+  try {
+    if (act === 'execute') show(await request(`/api/plan/${id}/execute`, { method: 'POST' }));
+    if (act === 'cancel') show(await request(`/api/plan/${id}/cancel`, { method: 'POST' }));
+    if (act === 'edit') {
+      const p = [...lastData.waiting, ...lastData.blocked].find(x => x.id === id);
+      if (p) {
+        editing = id;
+        form.elements.line.value = p.line_id;
+        form.elements.source.value = p.source;
+        form.elements.flow.value = p.flow_m3_hour;
+        form.elements.target_start.value = LOCAL(p.target_start);
+        document.querySelector('#form-title').textContent = `调整计划 ${id.slice(0, 8)}…`;
+        document.querySelector('#form-submit').textContent = '保存调整';
+        document.querySelector('#form-cancel').hidden = false;
+      }
+    }
+    loadPlan();
+  } catch (err) { showError(err); loadPlan(); }
+});
+
+resetForm();
+loadPlan().catch(showError);
+setInterval(() => loadPlan().catch(() => {}), 5000);
+</script></body></html>

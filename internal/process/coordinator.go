@@ -18,6 +18,7 @@ import (
 	"github.com/wyw14/cry-97/internal/journal"
 	"github.com/wyw14/cry-97/internal/lab"
 	"github.com/wyw14/cry-97/internal/model"
+	"github.com/wyw14/cry-97/internal/plan"
 	"github.com/wyw14/cry-97/internal/sensor"
 	"github.com/wyw14/cry-97/internal/settling"
 	"github.com/wyw14/cry-97/internal/sludge"
@@ -50,6 +51,7 @@ type Plant struct {
 	devices       *DeviceBus
 	sampler       *sensor.Sampler
 	receiver      *sensor.Receiver
+	planBoard     *plan.Board
 }
 
 func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plant, error) {
@@ -159,6 +161,11 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		listener.Bind(state)
 		plant.settling[lineID] = state
 	}
+	planBoard, err := plan.NewBoard(plant, now)
+	if err != nil {
+		return nil, err
+	}
+	plant.planBoard = planBoard
 	if err := sampler.Subscribe(func(sample model.Sample) {
 		if sample.Kind == model.SampleSludgeBlanket {
 			_, _ = plant.UpdateBlanket(sample.LineID, sample.Value)

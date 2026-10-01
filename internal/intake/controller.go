@@ -68,6 +68,13 @@ func (c *Controller) Admit(ctx context.Context, lineID model.LineID, flow float6
 	return admission, nil
 }
 
+func (c *Controller) Capacity(lineID model.LineID) (float64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	value, ok := c.capacity[lineID]
+	return value, ok
+}
+
 func (c *Controller) Current(lineID model.LineID) (Admission, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
